@@ -85,19 +85,11 @@ async fn main() -> anyhow::Result<()> {
         RingBuf::try_from(ebpf.take_map("LATENCY_RINGBUF").unwrap())?;
 
     let stats = Arc::new(Mutex::new(stats::LatencyStats::new()));
-    let cmd_stats: Option<Arc<Mutex<stats::CommandStats>>> = if cfg.command_stats {
-        Some(Arc::new(Mutex::new(stats::CommandStats::new())))
-    } else {
-        None
-    };
-    let client_stats: Option<Arc<Mutex<stats::ClientStats>>> = if cfg.client_stats {
-        Some(Arc::new(Mutex::new(stats::ClientStats::new())))
-    } else {
-        None
-    };
+    let cmd_stats = Arc::new(Mutex::new(stats::CommandStats::new()));
+    let client_stats = Arc::new(Mutex::new(stats::ClientStats::new()));
 
     reader::spawn_ringbuf_reader(ring_buf, stats.clone(), cmd_stats.clone(), client_stats.clone());
-    reporter::spawn_reporter(stats, cmd_stats, client_stats, cfg.interval_secs);
+    reporter::spawn_reporter(stats, Some(cmd_stats), Some(client_stats), cfg.interval_secs);
 
     // ── Flame graph: perf_event CPU sampling ───────────────────────
     let flame_samples = Arc::new(Mutex::new(Vec::<StackEvent>::new()));
