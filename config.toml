@@ -1,0 +1,26 @@
+# aya-test 示例配置文件
+# 用法: ./aya-test --config config.toml
+
+[redis]
+# Redis PID 文件路径
+pid_file = "/var/run/redis/redis.pid"
+
+[sampling]
+# CPU 采样频率 (Hz), 0 或省略则跳过火焰图采样
+frequency_hz = 99
+
+[report]
+# 统计报告输出间隔 (秒)
+interval_secs = 30
+# 是否启用 per-command 延迟分解 (关闭可降低开销)
+command_stats = true
+# 是否启用 per-client-IP 统计 (关闭可降低开销)
+client_stats = true
+
+[flamegraph]
+# 火焰图 SVG 输出路径
+output = "/tmp/redis_flamegraph.svg"
+
+[output]
+# 将统计输出重定向到文件 (默认 stdout)
+# file = "/var/log/aya-test/stats.log"

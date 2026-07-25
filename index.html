@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redis eBPF Performance Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+    padding: 20px;
+}
+h1 {
+    font-size: 22px;
+    margin-bottom: 20px;
+    color: #ff6b6b;
+}
+h1 span { color: #00d4ff; }
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.card {
+    background: #16213e;
+    border-radius: 10px;
+    padding: 20px;
+    border: 1px solid #1a3a5c;
+}
+.card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #6c8ebf;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+.card .value {
+    font-size: 28px;
+    font-weight: bold;
+}
+.card .unit {
+    font-size: 13px;
+    color: #888;
+    font-weight: normal;
+}
+.card .sub {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+}
+.accent { color: #00d4ff; }
+.warn  { color: #ff6b6b; }
+.good  { color: #51cf66; }
+.latency-chart {
+    background: #16213e;
+    border-radius: 10px;
+    padding: 20px;
+    border: 1px solid #1a3a5c;
+    margin-bottom: 24px;
+}
+canvas { max-height: 300px; }
+.status-bar {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: #6c8ebf;
+    margin-bottom: 16px;
+}
+.dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+}
+.dot.green { background: #51cf66; }
+.dot.red   { background: #ff6b6b; }
+</style>
+</head>
+<body>
+<div class="status-bar">
+    <span><span class="dot green"></span> eBPF Running</span>
+    <span>Update interval: 1s</span>
+    <span id="uptime">Uptime: --</span>
+</div>
+
+<h1>🔴 <span>Redis</span> eBPF Performance Dashboard</h1>
+
+<div class="grid">
+    <div class="card">
+        <div class="label">QPS (Queries/sec)</div>
+        <div class="value accent" id="qps">--</div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Latency</div>
+        <div class="value good" id="avg">-- <span class="unit">us</span></div>
+    </div>
+    <div class="card">
+        <div class="label">P50 Median Latency</div>
+        <div class="value accent" id="p50">-- <span class="unit">us</span></div>
+    </div>
+    <div class="card">
+        <div class="label">P95 Latency</div>
+        <div class="value accent" id="p95">-- <span class="unit">us</span></div>
+    </div>
+    <div class="card">
+        <div class="label">P99 Tail Latency</div>
+        <div class="value warn" id="p99">-- <span class="unit">us</span></div>
+    </div>
+    <div class="card">
+        <div class="label">P999 Extreme Tail Latency</div>
+        <div class="value warn" id="p999">-- <span class="unit">us</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Active Connections</div>
+        <div class="value accent" id="conn">--</div>
+    </div>
+    <div class="card">
+        <div class="label">Read Throughput</div>
+        <div class="value accent" id="readMB">-- <span class="unit">MB/s</span></div>
+    </div>
+</div>
+
+<div class="latency-chart">
+    <div class="label" style="margin-bottom:12px">Latency Trend (last 60s)</div>
+    <canvas id="latencyChart"></canvas>
+</div>
+
+<script>
+const MAX_POINTS = 60;
+const chartData = {
+    labels: [],
+    avg: [], p50: [], p95: [], p99: [], p999: []
+};
+
+const ctx = document.getElementById('latencyChart').getContext('2d');
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: chartData.labels,
+        datasets: [
+            { label: 'Avg', data: chartData.avg,
+              borderColor: '#51cf66', borderWidth: 1, pointRadius: 0, tension: 0.3 },
+            { label: 'P50', data: chartData.p50,
+              borderColor: '#339af0', borderWidth: 1, pointRadius: 0, tension: 0.3 },
+            { label: 'P95', data: chartData.p95,
+              borderColor: '#ffd43b', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+            { label: 'P99', data: chartData.p99,
+              borderColor: '#ff6b6b', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+            { label: 'P999', data: chartData.p999,
+              borderColor: '#ff0000', borderWidth: 2, pointRadius: 0, tension: 0.3,
+              borderDash: [4, 4] },
+        ]
+    },
+    options: {
+        responsive: true,
+        animation: { duration: 200 },
+        scales: {
+            y: {
+                type: 'logarithmic',
+                title: { text: 'Latency (us)', color: '#888' },
+                grid: { color: '#1a3a5c' },
+                ticks: { color: '#888' }
+            },
+            x: {
+                grid: { color: '#1a3a5c' },
+                ticks: { color: '#888', maxTicksLimit: 10 }
+            }
+        },
+        plugins: {
+            legend: { labels: { color: '#888', usePointStyle: true,
+                boxWidth: 6, padding: 16 } }
+        }
+    }
+});
+
+function pushPoint(label, avg, p50, p95, p99, p999) {
+    chartData.labels.push(label);
+    chartData.avg.push(avg);
+    chartData.p50.push(p50);
+    chartData.p95.push(p95);
+    chartData.p99.push(p99);
+    chartData.p999.push(p999);
+
+    if (chartData.labels.length > MAX_POINTS) {
+        chartData.labels.shift();
+        chartData.avg.shift();
+        chartData.p50.shift();
+        chartData.p95.shift();
+        chartData.p99.shift();
+        chartData.p999.shift();
+    }
+    chart.update();
+}
+
+function setValue(id, value, unit, decimals = 1) {
+    const el = document.getElementById(id);
