@@ -248,11 +248,14 @@ pub fn on_cpu_sample(ctx: PerfEventContext) -> u32 {
 
 unsafe fn try_cpu_sample(ctx: &PerfEventContext) -> Result<u32, i64> {
     use core::ffi::c_void;
-    let pid = ctx.pid();
-    if !is_target_pid(pid) || !flamegraph_enabled() { return Ok(0); }
+
+    // Use tgid (process PID) not pid (kernel TID) so that samples from
+    // any thread of the target process (e.g. Redis IO threads) are accepted.
+    let tgid = ctx.tgid();
+    if !is_target_pid(tgid) || !flamegraph_enabled() { return Ok(0); }
 
     let mut event = StackEvent {
-        pid, cpu: unsafe { bpf_get_smp_processor_id() },
+        pid: ctx.pid(), cpu: unsafe { bpf_get_smp_processor_id() },
         kstack_len: -1, ustack_len: -1, timestamp_ns: now_ns(),
         kstack_ips: [0u64; MAX_STACK_FRAMES], ustack_ips: [0u64; MAX_STACK_FRAMES],
     };
@@ -265,10 +268,7 @@ unsafe fn try_cpu_sample(ctx: &PerfEventContext) -> Result<u32, i64> {
     event.ustack_len = if uret >= 0 { (uret as i32) / 8 } else { -1 };
 
     if event.kstack_len > 0 || event.ustack_len > 0 {
-        // Stack samples are low-frequency (e.g. 99 Hz) — wakeup cost
-        // is negligible; use NO_WAKEUP and let latency events gate
-        // userspace notification.
-        let _ = STACK_RINGBUF.output::<StackEvent>(&event, BPF_RB_NO_WAKEUP);
+        let _ = STACK_RINGBUF.output::<StackEvent>(&event, 0);
     }
     Ok(0)
 }

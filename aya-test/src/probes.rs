@@ -10,7 +10,6 @@ use aya::programs::fexit::FExit;
 use aya::programs::perf_event::{
     PerfEvent, PerfEventConfig, PerfEventScope, SamplePolicy, SoftwareEvent,
 };
-use aya::util::online_cpus;
 use aya::{Btf, Ebpf};
 use log::info;
 
@@ -40,20 +39,21 @@ pub fn attach_probes(ebpf: &mut Ebpf) -> anyhow::Result<()> {
 }
 
 /// Loads and attaches the `on_cpu_sample` perf-event program.
-pub fn attach_perf_event(ebpf: &mut Ebpf, frequency_hz: u64) -> anyhow::Result<()> {
+/// Uses `OneProcess` scope targeting the Redis PID, because
+/// `AllProcessesOneCpu` with per-task `CpuClock` only measures
+/// the calling process, not all processes on the CPU.
+pub fn attach_perf_event(ebpf: &mut Ebpf, target_pid: u32, frequency_hz: u64) -> anyhow::Result<()> {
     let prog: &mut PerfEvent =
         ebpf.program_mut("on_cpu_sample").unwrap().try_into()?;
     prog.load()?;
 
     let config = PerfEventConfig::Software(SoftwareEvent::CpuClock);
-    for cpu_id in online_cpus().map_err(|(_, e)| e)? {
-        prog.attach(
-            config,
-            PerfEventScope::AllProcessesOneCpu { cpu: cpu_id },
-            SamplePolicy::Frequency(frequency_hz),
-            true,
-        )?;
-    }
+    prog.attach(
+        config,
+        PerfEventScope::OneProcess { pid: target_pid, cpu: None },
+        SamplePolicy::Frequency(frequency_hz),
+        true,
+    )?;
     Ok(())
 }
 

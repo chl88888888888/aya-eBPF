@@ -94,7 +94,13 @@ async fn main() -> anyhow::Result<()> {
     // ── Flame graph: perf_event CPU sampling ───────────────────────
     let flame_samples = Arc::new(Mutex::new(Vec::<StackEvent>::new()));
 
-    match probes::attach_perf_event(&mut ebpf, cfg.frequency_hz) {
+    // Read Redis PID for explicit perf-event targeting.
+    let redis_pid: u32 = std::fs::read_to_string(&cfg.pid_file)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+
+    match probes::attach_perf_event(&mut ebpf, redis_pid, cfg.frequency_hz) {
         Ok(_) => {
             probes::enable_flamegraph(&mut ebpf)?;
 
@@ -104,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
 
             info!("Flame-graph CPU sampling enabled ({} Hz)", cfg.frequency_hz);
         }
-        Err(e) => warn!("Perf-event attach failed (no flame graph): {}", e),
+        Err(e) => warn!("Perf-event attach failed (no flame graph): {:#}", e),
     }
 
     println!(">>> Redis eBPF Performance Tracing System started");
@@ -123,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = flamegraph::generate_flamegraph_svg(&samples, &cfg.flamegraph_output) {
                 warn!("Failed to generate flame graph: {}", e);
             }
+        } else {
+            info!("No stack samples collected — skipping flame graph");
         }
     }
 
