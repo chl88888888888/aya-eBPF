@@ -94,11 +94,8 @@ async fn main() -> anyhow::Result<()> {
     // ── Flame graph: perf_event CPU sampling ───────────────────────
     let flame_samples = Arc::new(Mutex::new(Vec::<StackEvent>::new()));
 
-    // Read Redis PID for explicit perf-event targeting.
-    let redis_pid: u32 = std::fs::read_to_string(&cfg.pid_file)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    // Resolve Redis PID: prefer pid_file, fall back to /proc scan.
+    let redis_pid: u32 = resolve_redis_pid(&cfg.pid_file);
 
     match probes::attach_perf_event(&mut ebpf, redis_pid, cfg.frequency_hz) {
         Ok(_) => {
@@ -135,5 +132,45 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the Redis process PID.
+///
+/// Tries the PID file first; if that fails, scans /proc for a process
+/// named `valkey-server` or `redis-server` listening on the default port.
+fn resolve_redis_pid(pid_file: &str) -> u32 {
+    use std::fs;
+
+    // 1. Try the PID file.
+    if let Ok(s) = fs::read_to_string(pid_file) {
+        if let Ok(pid) = s.trim().parse::<u32>() {
+            if pid > 1 && fs::metadata(&format!("/proc/{}", pid)).is_ok() {
+                return pid;
+            }
+        }
+    }
+
+    // 2. Fallback: scan /proc for valkey-server or redis-server.
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let comm_path = entry.path().join("comm");
+            if let Ok(comm) = fs::read_to_string(&comm_path) {
+                let comm = comm.trim();
+                if comm == "valkey-server" || comm == "redis-server" {
+                    if let Some(pid_str) = entry.file_name().to_str() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            if pid > 1 {
+                                info!("Auto-detected {} PID {} from /proc", comm, pid);
+                                return pid;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    warn!("Cannot resolve Redis PID — flame graph will be unavailable");
+    0
 }
 
